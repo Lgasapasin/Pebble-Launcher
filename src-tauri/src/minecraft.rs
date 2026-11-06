@@ -1,5 +1,5 @@
 // Pebble Launcher v0.1: complete Minecraft module. Replace the entire file.
-use crate::{auth, models::*, net, storage};
+use crate::{auth, instances, models::*, net, storage};
 use futures_util::{stream, StreamExt};
 use serde::Serialize;
 use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, process::Stdio, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
