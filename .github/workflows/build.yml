@@ -1,0 +1,64 @@
+name: Pebble Linux AppImage (manual)
+
+# Opt-in testing only: no push/PR triggers, no publication, no GitHub Release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    name: Check and package Linux x86_64 AppImage
+    runs-on: ubuntu-22.04
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify complete sources before compiling
+        run: python3 scripts/check_source.py
+
+      - name: Install Tauri prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl file libayatana-appindicator3-dev libfuse2 \
+            librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install JS packages
+        run: npm install --no-audit --no-fund
+
+      - name: Check UI types
+        run: npm run check
+
+      - name: Compile Rust backend without packaging
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build only AppImage
+        run: npm run build -- --bundles appimage
+
+      - name: Upload test artifact (no release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pebble-launcher-dev-linux-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
