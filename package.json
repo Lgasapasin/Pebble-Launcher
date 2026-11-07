@@ -1,12 +1,13 @@
 {
   "name": "pebble-launcher",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
     "check": "tsc --noEmit",
+    "check:offline": "tsc -p tsconfig.offline.json",
     "web:dev": "vite",
     "web:build": "vite build"
   },

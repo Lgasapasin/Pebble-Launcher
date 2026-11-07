@@ -3,7 +3,7 @@ use std::path::Path;
 
 pub fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("PebbleLauncher/0.1 (personal Java launcher)")
+        .user_agent("PebbleLauncher/0.3 (Minecraft mod manager)")
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(180))
         .build().map_err(|e| e.to_string())
@@ -16,14 +16,17 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(client: &reqwest::Client, 
         .json::<T>().await.map_err(|e| e.to_string())
 }
 
-fn validate_url(url: &str) -> Result<(), String> {
+pub(crate) fn validate_url(url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
     let hostname = parsed.host_str().unwrap_or_default();
     if parsed.scheme() != "https" || !matches!(hostname,
         "piston-meta.mojang.com" | "piston-data.mojang.com" |
         "libraries.minecraft.net" | "resources.download.minecraft.net" |
         "launcher.mojang.com" | "launchermeta.mojang.com" |
-        "maven.minecraftforge.net" | "maven.fabricmc.net") {
+        "maven.minecraftforge.net" | "maven.fabricmc.net" |
+        "maven.neoforged.net" | "maven.quiltmc.org" | "repo.maven.apache.org" |
+        "api.modrinth.com" | "cdn.modrinth.com" | "api.adoptium.net" |
+        "meta.fabricmc.net" | "meta.quiltmc.org") {
         return Err(format!("Untrusted Minecraft download source: {hostname}"));
     }
     Ok(())

@@ -4,6 +4,9 @@ mod instances;
 mod models;
 mod net;
 mod storage;
+mod java;
+mod loaders;
+mod mods;
 
 pub fn run() {
     tauri::Builder::default()
@@ -29,6 +32,13 @@ pub fn run() {
             instances::list_instance_mods,
             instances::list_instance_worlds,
             instances::open_instance_folder,
+            loaders::list_loader_versions,
+            loaders::configure_instance_loader,
+            mods::find_mods,
+            mods::install_modrinth_mod,
+            mods::list_local_mods,
+            mods::toggle_local_mod,
+            mods::remove_local_mod,
         ])
         .run(tauri::generate_context!())
         .expect("Launcher startup failed");

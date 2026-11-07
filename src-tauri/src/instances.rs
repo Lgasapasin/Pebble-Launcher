@@ -10,7 +10,13 @@ pub struct Instance {
     pub id: String,
     pub name: String,
     pub version_id: String,
+    #[serde(default = "default_loader")]
+    pub loader: String,
+    #[serde(default)]
+    pub loader_version: Option<String>,
 }
+
+fn default_loader() -> String { "vanilla".into() }
 
 fn instance_root(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     storage::safe_id(id)?;
@@ -66,9 +72,21 @@ pub fn create_instance(app: AppHandle, name: String, version_id: String) -> Resu
     }
     let folder = instance_root(&app, &id)?;
     fs::create_dir_all(folder.join("game")).map_err(|e| e.to_string())?;
-    let instance = Instance { id, name: name.into(), version_id };
+    let instance = Instance { id, name: name.into(), version_id, loader: default_loader(), loader_version: None };
     fs::write(folder.join("instance.json"), serde_json::to_vec_pretty(&instance).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    Ok(instance)
+}
+
+pub fn set_loader(app: &AppHandle, instance_id: &str, loader: &str, version: Option<String>) -> Result<Instance, String> {
+    let mut instance = find_instance(app, instance_id)?;
+    instance.loader = loader.into();
+    instance.loader_version = version;
+    let metadata = instance_root(app, instance_id)?.join("instance.json");
+    let temp = metadata.with_extension("json.tmp");
+    fs::write(&temp, serde_json::to_vec_pretty(&instance).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    #[cfg(windows)] if metadata.exists() { fs::remove_file(&metadata).map_err(|e| e.to_string())?; }
+    fs::rename(temp, metadata).map_err(|e| e.to_string())?;
     Ok(instance)
 }
 

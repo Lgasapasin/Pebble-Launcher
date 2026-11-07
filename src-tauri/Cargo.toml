@@ -1,6 +1,6 @@
 [package]
 name = "pebble-launcher"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Minimal Minecraft Java Edition launcher"
 license = "MIT"
@@ -21,7 +21,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs", 
 futures-util = "0.3"
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-keyring = "3"
+keyring = { version = "3", features = ["sync-secret-service", "windows-native", "crypto-rust"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 urlencoding = "2"
 
 md5 = "0.7"

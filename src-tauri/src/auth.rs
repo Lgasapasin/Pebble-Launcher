@@ -208,6 +208,8 @@ pub async fn import_session(app: AppHandle, token: String) -> Result<Vec<Account
         access_token: token.to_owned(), refresh_token: None,
         client_id: None, expires_at: 0,
     })?;
+    // Catch broken OS keychain access immediately, not later on launch.
+    let _ = read_secrets(&record.id)?;
     upsert(&app, record)
 }
 

@@ -219,3 +219,9 @@ label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; font-w
   .method { min-height: 138px; }
   .method small { font-size: 9px; }
 }
+/* Mod-loader selection and installed-mod controls */
+.instance-loader-config{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;margin:12px 0}
+.instance-loader-config select,.instance-loader-config input{min-width:125px;flex:1;background:#201e2c;color:#e9e7f7;border:1px solid #454158;border-radius:8px;padding:10px}
+.instance-loader-config input{min-width:200px}
+.file-item .grow{flex:1;min-width:120px}
+.file-item .grow strong{display:block;margin-bottom:2px}

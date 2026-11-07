@@ -1,5 +1,5 @@
 // Pebble Launcher v0.1: complete Minecraft module. Replace the entire file.
-use crate::{auth, instances, models::*, net, storage};
+use crate::{auth, instances, java, loaders, models::*, net, storage};
 use futures_util::{stream, StreamExt};
 use serde::Serialize;
 use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, process::Stdio, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
@@ -222,23 +222,6 @@ fn substitute(text: &str, vars: &HashMap<&str, String>) -> String {
     vars.iter().fold(text.to_owned(), |s, (key, value)| s.replace(&format!("${{{key}}}"), value))
 }
 
-async fn verify_java(java: &str, expected: u32) -> Result<(), String> {
-    let output = Command::new(java).arg("-version").output().await.map_err(|_| format!("Java not found: {java}; select a Java {expected} runtime"))?;
-    if !output.status.success() { return Err(format!("Java failed to run: {java}")); }
-    let out = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
-    let major = out.lines().filter(|l| l.contains("version") || l.starts_with("openjdk"))
-        .find_map(|line| {
-            let field = line.split('"').nth(1).unwrap_or_else(|| line.split_whitespace().nth(1).unwrap_or(""));
-            let nums: Vec<&str> = field.split('.').collect();
-            if nums.first() == Some(&"1") { nums.get(1)?.parse::<u32>().ok() }
-            else { nums.first()?.parse::<u32>().ok() }
-        });
-    if major != Some(expected) {
-        return Err(format!("Minecraft requires Java {expected}; detected Java {:?}. Select the exact required runtime in Settings.", major));
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn launch_game(
     app: AppHandle,
@@ -250,7 +233,7 @@ pub async fn launch_game(
 ) -> Result<(), String> {
     storage::safe_id(&version_id)?;
     if !(1024..=32768).contains(&memory_mb) { return Err("Memory must be between 1024 and 32768 MB".into()); }
-    if java_path.trim().is_empty() { return Err("Provide a Java executable path".into()); }
+    // Empty or auto Java setting is supported. A detected incompatible Java triggers selection/download.
     let root = storage::root(&app)?;
     if !is_installed(app.clone(), version_id.clone())? {
         return Err("Install this Minecraft version before launching".into());
@@ -259,13 +242,14 @@ pub async fn launch_game(
         .map_err(|e| e.to_string())?;
     let (account, token) = auth::access_for_launch(&app).await?;
     let required_java = meta.java_version.as_ref().map(|j| j.major_version).unwrap_or(8);
-    verify_java(&java_path, required_java).await?;
+    let java_runtime = java::resolve(&app, java_path.trim(), required_java).await?;
     let args = meta.arguments.as_ref().ok_or("Unsupported legacy Minecraft version")?;
     let game_dir = match instance_id.as_deref() {
         Some(id) => instances::game_directory(&app, id, &version_id)?,
         None => root.join("instances").join(&version_id).join("game"),
     };
     tokio::fs::create_dir_all(&game_dir).await.map_err(|e| e.to_string())?;
+    let loader_profile = if let Some(id) = instance_id.as_deref() { loaders::prepare(&app, id).await? } else { loaders::PreparedLoader::default() };
     let natives_dir = root.join("natives").join(&version_id);
     let mut classpath = Vec::new();
     for lib in &meta.libraries {
@@ -275,18 +259,20 @@ pub async fn launch_game(
             }
         }
     }
+    // Extra mod-loader libraries follow the Mojang base libraries.
+    classpath.extend(loader_profile.libraries.iter().cloned());
     classpath.push(storage::version_jar(&root, &version_id));
     let cp = std::env::join_paths(&classpath).map_err(|e| e.to_string())?.to_string_lossy().to_string();
     let mut vars: HashMap<&str, String> = HashMap::new();
     let pairs = [
         ("natives_directory", natives_dir.to_string_lossy().to_string()),
         ("launcher_name", "PebbleLauncher".into()),
-        ("launcher_version", "0.1.0".into()),
+        ("launcher_version", "0.3.0-dev".into()),
         ("classpath", cp),
         ("classpath_separator", if cfg!(windows) { ";".into() } else { ":".into() }),
         ("library_directory", root.join("libraries").to_string_lossy().to_string()),
         ("auth_player_name", account.name.clone()),
-        ("version_name", meta.id.clone()),
+        ("version_name", loader_profile.profile_id.clone().unwrap_or_else(|| meta.id.clone())),
         ("game_directory", game_dir.to_string_lossy().to_string()),
         ("assets_root", root.join("assets").to_string_lossy().to_string()),
         ("game_assets", root.join("assets").to_string_lossy().to_string()),
@@ -302,16 +288,18 @@ pub async fn launch_game(
         ("resolution_height", "480".into()),
     ];
     for (key, value) in pairs { vars.insert(key, value); }
-    let mut cmd = Command::new(&java_path);
+    let mut cmd = Command::new(&java_runtime);
     cmd.arg(format!("-Xmx{memory_mb}M"));
     cmd.args(expand_arguments(&args.jvm, &vars));
+    cmd.args(expand_arguments(&loader_profile.jvm, &vars));
     if let Some(logging) = meta.logging.as_ref().and_then(|l| l.client.as_ref()) {
         if let Some(id) = logging.file.id.as_deref() {
             cmd.arg(logging.argument.replace("${path}", &root.join("logging").join(id).to_string_lossy()));
         }
     }
-    cmd.arg(&meta.main_class);
+    cmd.arg(loader_profile.main_class.as_deref().unwrap_or(&meta.main_class));
     cmd.args(expand_arguments(&args.game, &vars));
+    cmd.args(expand_arguments(&loader_profile.game, &vars));
     cmd.current_dir(&game_dir).stdout(Stdio::piped()).stderr(Stdio::piped());
     let running_id = instance_id.unwrap_or_else(|| format!("default-{version_id}"));
     {

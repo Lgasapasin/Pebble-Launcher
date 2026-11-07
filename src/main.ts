@@ -5,7 +5,9 @@ import './style.css';
 type Page = 'home' | 'play' | 'instances' | 'mods' | 'modpacks' | 'worlds' | 'servers' | 'accounts' | 'downloads' | 'settings' | 'console';
 type Method = 'microsoft' | 'offline' | 'session';
 type Version = { id: string; type: string; url: string };
-type Instance = { id: string; name: string; versionId: string };
+type Instance = { id: string; name: string; versionId: string; loader?: string; loaderVersion?: string | null };
+type ModProject = { projectId: string; title: string; description: string; iconUrl?: string };
+type LocalMod = { name: string; enabled: boolean };
 type Account = { id: string; name: string; uuid: string; kind: Method; active: boolean };
 type Progress = { version: string; done: number; total: number; message: string };
 type DevicePrompt = { userCode: string; verificationUri: string; expiresIn: number; message: string };
@@ -80,7 +82,7 @@ let selectedAccountId = saved('accountId', '');
 let accountSearch = '';
 let selectedMethod: Method = 'microsoft';
 let showSnapshots = saved('snapshots', false);
-let javaPath = saved('java', 'java');
+let javaPath = saved('java', 'auto');
 let memoryMb = saved('ram', 4096);
 let clientId = saved('clientId', '');
 let loginPrompt: DevicePrompt | null = null;
@@ -91,6 +93,9 @@ let loading = true;
 let progress: Progress | null = null;
 let logs: string[] = [];
 let mods: string[] = [];
+let localMods: LocalMod[] = [];
+let modResults: ModProject[] = [];
+let modSearch = '';
 let worlds: string[] = [];
 let error = '';
 let notice = '';
@@ -175,33 +180,44 @@ function homeView(): string {
   <section class="surface quick-launch"><div><h2>Quick Launch</h2><p>${esc(selectedVersion || 'Choose a version')} · ${esc(selectedInstance()?.name || 'Default installation')}</p></div>
   ${button(`${icon('play', 18)} Play Minecraft`, 'launch-default', 'primary', !active || !selectedVersion)}</section>
   <div class="split-info"><section class="surface"><h2>Available now</h2><p>Vanilla version downloads, Java launching, Microsoft accounts, offline profiles, secure session import, separate instances, and game logs.</p></section>
-  <section class="surface"><h2>Next integrations</h2><p>Fabric, Forge, NeoForge, Quilt, Modrinth, modpacks, server tools and advanced client integrations are staged for later development.</p></section></div>`;
+  <section class="surface"><h2>Mod management</h2><p>Fabric and Quilt profiles, experimental Forge and NeoForge installers, and compatible Modrinth downloads are available for testing. Modpacks and server tools remain planned.</p></section></div>`;
 }
 function playView(): string {
   const ready = installed.includes(selectedVersion);
   return `${title('Play Minecraft', 'Select a version, verify its files, and start the game.')}
-  <section class="surface primary-content"><div class="panel-row"><div><h2>Minecraft Java Edition</h2><p>Official Mojang downloads · Vanilla</p></div>${statusChip(ready ? 'Installed' : 'Not installed', ready ? 'green' : '')}</div>
+  <section class="surface primary-content"><div class="panel-row"><div><h2>Minecraft Java Edition</h2><p>Mojang downloads · Vanilla and installed mod-loader instances</p></div>${statusChip(ready ? 'Installed' : 'Not installed', ready ? 'green' : '')}</div>
     <div class="form-two"><label>Game version<select id="versionPicker" ${busy ? 'disabled' : ''}>${versionOptions()}</select></label><label>Launch instance<select id="playInstance" ${busy ? 'disabled' : ''}>
       <option value="">Default game folder</option>${instances.filter(i => i.versionId === selectedVersion).map(i => `<option value="${esc(i.id)}" ${i.id === selectedInstanceId ? 'selected' : ''}>${esc(i.name)}</option>`).join('')}</select></label></div>
     <label class="checkline"><input id="showSnapshots" type="checkbox" ${showSnapshots ? 'checked' : ''}/> Show snapshots</label>
     ${progressMarkup()}
     <div class="action-row">${button(`${icon('download', 17)} ${ready ? 'Verify / repair' : 'Install version'}`, 'install', 'secondary', !selectedVersion)}${button(`${icon('play', 18)} Play`, 'launch-default', 'primary', !selectedVersion || !activeAccount())}</div>
-    <p class="field-help">Minecraft Java requires an appropriate Java runtime. Java auto-install and mod loaders are planned, not implemented yet.</p>
+    <p class="field-help">Minecraft Java requires an appropriate Java runtime. Pebble detects Java from Minecraft metadata and can install a compatible Java runtime automatically.</p>
   </section>`;
 }
 function instancesView(): string {
   return `${title('Instances', 'Separate worlds, settings and mods in independent game directories.')}
   <div class="panel-row instances-toolbar"><div><h2>My Instances</h2><p>${instances.length} configured</p></div>${button(`${icon('plus', 16)} New Instance`, 'toggle-instance-form', 'primary')}</div>
   ${instanceForm ? `<form id="newInstanceForm" class="surface new-instance-form"><div class="form-two"><label>Instance name<input id="newInstanceName" name="name" placeholder="Survival" maxlength="64" required/></label><label>Minecraft version<select id="newInstanceVersion" required>${versionOptions()}</select></label></div><div class="action-row">${button('Cancel', 'toggle-instance-form')}${button(`${icon('plus', 16)} Create instance`, 'create-instance', 'primary', !selectedVersion)}</div></form>` : ''}
-  <div class="instance-grid">${instances.map(i => `<section class="surface instance-item"><div class="instance-tile">${icon('modpacks', 25)}</div><div class="instance-info"><h3>${esc(i.name)}</h3><p>Vanilla · ${esc(i.versionId)}</p></div>${statusChip(installed.includes(i.versionId) ? 'Installed' : 'Not installed', installed.includes(i.versionId) ? 'green' : '')}
+  <div class="instance-grid">${instances.map(i => `<section class="surface instance-item"><div class="instance-tile">${icon('modpacks', 25)}</div><div class="instance-info"><h3>${esc(i.name)}</h3><p>${esc(i.loader || 'vanilla')} ${esc(i.loaderVersion || '')} · ${esc(i.versionId)}</p></div>${statusChip(installed.includes(i.versionId) ? 'Installed' : 'Not installed', installed.includes(i.versionId) ? 'green' : '')}
+    <div class="instance-loader-config"><select id="loader-${esc(i.id)}" aria-label="Mod loader for ${esc(i.name)}">
+      ${['vanilla','fabric','quilt','forge','neoforge'].map(l => `<option value="${l}" ${(i.loader || 'vanilla') === l ? 'selected' : ''}>${l}</option>`).join('')}
+      </select><input id="loader-build-${esc(i.id)}" value="${esc(i.loaderVersion || '')}" placeholder="Loader build (auto for Fabric/Quilt)" aria-label="Loader build" />
+      ${button('Install Loader', 'install-loader', 'secondary', false, `data-id="${esc(i.id)}"`)}</div>
     <div class="instance-actions">${button(`${icon('play', 17)} Play`, 'launch-instance', 'primary', !activeAccount(), `data-id="${esc(i.id)}"`)}${button(`${icon('folder', 17)} Files`, 'open-instance', 'secondary', false, `data-id="${esc(i.id)}"`)}${button(`${icon('trash', 16)}`, 'remove-instance', 'danger', false, `aria-label="Remove instance" data-id="${esc(i.id)}"`)}</div></section>`).join('') || '<div class="surface empty-state">No instances yet. Create one to keep saves and mods separate.</div>'}</div>`;
 }
 function modsView(): string {
-  return `${title('Mods', 'Inspect mods installed in each instance. Automatic loaders are coming later.')}
-  <section class="surface primary-content"><div class="panel-row"><h2>Installed mod files</h2>${instancePicker()}</div>
-  ${selectedInstance() ? `<div class="file-list">${mods.map(m => `<div class="file-item">${icon('mods', 17)}<span>${esc(m)}</span>${statusChip('Local')}</div>`).join('') || '<div class="empty-state">No JAR files in this instance’s mods folder.</div>'}</div>
-  <div class="action-row">${button(`${icon('folder', 17)} Open Mods Folder`, 'open-mods', 'secondary')}</div>` : '<p>Select or create an instance to browse its mods.</p>'}
-  <p class="field-help">Installing a .jar into this folder does not install Fabric/Forge/NeoForge/Quilt. Use only mods compatible with the selected loader and game version.</p></section>`;
+  const inst = selectedInstance();
+  return `${title('Mods', 'Browse compatible Modrinth mods and manage instance JAR files.')}
+  <section class="surface primary-content"><div class="panel-row"><h2>Mod manager</h2>${instancePicker()}</div>
+  ${inst ? `<p class="field-help">${esc(inst.name)} · ${esc(inst.versionId)} · ${esc(inst.loader || 'vanilla')}. Install and configure a loader under Instances first.</p>
+    <div class="inline-form"><input id="modSearch" placeholder="Search Modrinth…" maxlength="90" value="${esc(modSearch)}" aria-label="Search Modrinth mods"/>
+    ${button(`${icon('search', 15)} Search`, 'mod-search', 'primary', (inst.loader || 'vanilla') === 'vanilla')}</div>
+    <div class="file-list">${modResults.map(m => `<div class="file-item"><div class="grow"><strong>${esc(m.title)}</strong><p class="field-help">${esc(m.description.slice(0, 140))}</p></div>${button('Install', 'mod-install', 'secondary', false, `data-id="${esc(m.projectId)}"`)}</div>`).join('') || '<div class="empty-state">Search for mods compatible with your game version and loader.</div>'}</div>
+    <h3 class="section-subheading">Installed JARs</h3>
+    <div class="file-list">${localMods.map(m => `<div class="file-item">${icon('mods', 17)}<span class="grow">${esc(m.name)}</span>${statusChip(m.enabled ? 'Enabled' : 'Disabled', m.enabled ? 'green' : '')}
+    ${button(m.enabled ? 'Disable' : 'Enable', 'mod-toggle', 'secondary', false, `data-id="${esc(m.name)}" data-enabled="${m.enabled ? 'false' : 'true'}"`)}${button('Remove', 'mod-remove', 'danger', false, `data-id="${esc(m.name)}"`)}</div>`).join('') || '<div class="empty-state">No installed mods yet.</div>'}</div>
+    <div class="action-row">${button(`${icon('folder', 17)} Open Mods Folder`, 'open-mods')}</div>` : '<p>Create or select an instance to manage mods.</p>'}
+  </section>`;
 }
 function worldsView(): string {
   return `${title('Worlds', 'Inspect saved worlds for a selected instance.')}
@@ -233,8 +249,8 @@ function progressMarkup(): string {
 function settingsView(): string {
   return `${title('Settings', 'Launcher configuration and Minecraft launch options.')}
   <section class="surface primary-content settings-form"><div class="panel-row"><h2>Java & Game</h2>${statusChip('Local settings')}</div>
-    <label>Java executable<input id="javaPath" value="${esc(javaPath)}" spellcheck="false" placeholder="java"/></label>
-    <p class="field-help">Enter <code>java</code> to use Java on PATH, or a full executable path. Compatibility varies by Minecraft version.</p>
+    <label>Java runtime (auto or custom executable)<input id="javaPath" value="${esc(javaPath)}" spellcheck="false" placeholder="auto"/></label>
+    <p class="field-help">Use <code>auto</code> to detect and install the version specified by Minecraft metadata (Java 21 for 1.21.x; newer versions may require Java 25). A custom path is optional.</p>
     <label>Maximum memory (MB)<input id="memoryMb" type="number" value="${memoryMb}" min="1024" max="32768" step="256"/></label>
     <div class="panel-row section-heading"><h2>Authentication</h2>${icon('shield', 20)}</div>
     <label>Microsoft application (client) ID<input id="clientId" value="${esc(clientId)}" spellcheck="false" placeholder="Public Azure app client ID"/></label>
@@ -253,7 +269,7 @@ function render(): void {
     worlds: worldsView, servers: () => futureView('servers'), accounts: accountsView, downloads: downloadsView,
     settings: settingsView, console: consoleView,
   };
-  root.innerHTML = `<div class="app-shell"><aside class="sidebar"><div class="brand"><div class="brand-logo"><span class="logo-cube"></span></div><div><strong>Pebble Launcher</strong><small>v0.2.0-dev</small></div></div>
+  root.innerHTML = `<div class="app-shell"><aside class="sidebar"><div class="brand"><div class="brand-logo"><span class="logo-cube"></span></div><div><strong>Pebble Launcher</strong><small>v0.3.0-dev</small></div></div>
     <nav class="nav-list" aria-label="Main navigation">${navigation.map(p => `<button data-action="navigate" data-page="${p}" class="nav-item ${page === p ? 'active' : ''}" aria-current="${page === p ? 'page' : 'false'}">${icon(p, 21)}<span>${label[p]}</span></button>`).join('')}</nav>
     <div class="sidebar-bottom"><span class="block-emoji">▥</span><span>Minecraft<br/><b>${previewMode ? 'UI preview' : 'Ready'}</b></span><span class="status-dot"></span></div></aside>
     <main class="main-area"><div class="topbar"><span>${icon('modpacks', 16)} Minecraft Java Edition</span><span>${previewMode ? statusChip('Browser preview', 'warning') : statusChip('Development build')}</span></div>
@@ -283,13 +299,14 @@ async function syncInstances(): Promise<void> {
   save('instanceId', selectedInstanceId);
 }
 async function syncFiles(): Promise<void> {
-  if (!selectedInstanceId || previewMode) { mods = []; worlds = []; return; }
+  if (!selectedInstanceId || previewMode) { mods = []; localMods = []; worlds = []; return; }
   const [m, w] = await Promise.allSettled([
     invoke<string[]>('list_instance_mods', { instanceId: selectedInstanceId }),
     invoke<string[]>('list_instance_worlds', { instanceId: selectedInstanceId }),
   ]);
   mods = m.status === 'fulfilled' ? m.value : [];
   worlds = w.status === 'fulfilled' ? w.value : [];
+  try { localMods = await invoke<LocalMod[]>('list_local_mods', { instanceId: selectedInstanceId }); } catch { localMods = []; }
 }
 async function installVersion(id: string): Promise<void> {
   if (!installed.includes(id)) {
@@ -338,6 +355,9 @@ async function action(name: string, element: HTMLElement): Promise<void> {
   const inputInstanceName = name === 'create-instance' ? formValue('newInstanceName') : '';
   const inputInstanceVersion = name === 'create-instance' ? formValue('newInstanceVersion') : '';
   const newJava = name === 'save-settings' ? formValue('javaPath') : '';
+  const searchText = name === 'mod-search' ? formValue('modSearch') : '';
+  const loaderKind = name === 'install-loader' ? formValue(`loader-${element.dataset.id || ''}`) : '';
+  const loaderBuild = name === 'install-loader' ? formValue(`loader-build-${element.dataset.id || ''}`) : '';
   const newMemory = name === 'save-settings' ? formValue('memoryMb') : '';
   const newClientId = name === 'save-settings' ? formValue('clientId') : '';
   const newSnapshots = name === 'save-settings' ? ((document.getElementById('settingsSnapshots') as HTMLInputElement | null)?.checked ?? showSnapshots) : showSnapshots;
@@ -398,6 +418,32 @@ async function action(name: string, element: HTMLElement): Promise<void> {
         if (!window.confirm(`Permanently delete ${inst.name} and its mods, saves and settings? Back up your worlds first.`)) return;
         await invoke('remove_instance', { instanceId: inst.id }); await syncInstances(); notice = 'Instance removed'; break;
       }
+      case 'install-loader': {
+        const inst = instances.find(i => i.id === targetId);
+        if (!inst) throw new Error('Instance not found');
+        await installVersion(inst.versionId);
+        await invoke('configure_instance_loader', { instanceId: inst.id, loader: loaderKind, loaderVersion: loaderBuild || null, javaPath });
+        await syncInstances(); selectedInstanceId = inst.id;
+        modResults = []; notice = `${inst.name}: ${loaderKind} configured`; break;
+      }
+      case 'mod-search':
+        if (!selectedInstanceId) throw new Error('Select an instance first');
+        modSearch = searchText;
+        modResults = await invoke<ModProject[]>('find_mods', { instanceId: selectedInstanceId, query: modSearch });
+        notice = `Found ${modResults.length} compatible projects`; break;
+      case 'mod-install':
+        if (!selectedInstanceId) throw new Error('Select an instance');
+        localMods = await invoke<LocalMod[]>('install_modrinth_mod', { instanceId: selectedInstanceId, projectId: targetId });
+        notice = 'Mod and required dependencies installed'; break;
+      case 'mod-toggle':
+        if (!selectedInstanceId) throw new Error('Select an instance');
+        localMods = await invoke<LocalMod[]>('toggle_local_mod', { instanceId: selectedInstanceId, filename: targetId, enabled: element.dataset.enabled === 'true' });
+        notice = 'Mod status changed'; break;
+      case 'mod-remove':
+        if (!selectedInstanceId) throw new Error('Select an instance');
+        if (!window.confirm(`Delete ${targetId} from this instance?`)) return;
+        localMods = await invoke<LocalMod[]>('remove_local_mod', { instanceId: selectedInstanceId, filename: targetId });
+        notice = 'Mod file removed'; break;
       case 'open-instance':
         await invoke('open_instance_folder', { instanceId: targetId, subdirectory: 'game' }); break;
       case 'open-mods':
@@ -406,7 +452,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
         await invoke('open_instance_folder', { instanceId: selectedInstanceId, subdirectory: name === 'open-mods' ? 'mods' : 'saves' });
         await syncFiles(); break;
       case 'save-settings': {
-        const java = newJava || 'java';
+        const java = newJava || 'auto';
         const ram = Number(newMemory);
         const appClientId = newClientId;
         if (!Number.isInteger(ram) || ram < 1024 || ram > 32768) throw new Error('RAM must be 1024–32768 MB');
@@ -458,6 +504,7 @@ root.addEventListener('change', event => {
     else { void syncFiles().then(render).catch(fail); }
   }
   if (target.id === 'accountSearch') { accountSearch = target.value; render(); }
+  if (target.id === 'modSearch') { modSearch = target.value; }
 });
 async function init(): Promise<void> {
   render();
